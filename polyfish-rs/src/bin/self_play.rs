@@ -294,11 +294,7 @@ fn main() -> anyhow::Result<()> {
     // 3. Start Inference Servers
     // We use a channel size big enough to hold requests from all threads
     let (tx1, rx1) = std::sync::mpsc::sync_channel(1024);
-    let server1 = polyfish::ai::inference::InferenceServer::new(
-        network1_arc.clone(),
-        rx1,
-        256, // Max items per batch (approx 10 requests of 24)
-    );
+    let server1 = polyfish::ai::inference::InferenceServer::new(network1_arc.clone(), rx1, 32);
 
     // Spawn server 1
     std::thread::spawn(move || {
@@ -315,7 +311,7 @@ fn main() -> anyhow::Result<()> {
         polyfish::ai::mcts_zero::BatchEvaluator::new(eval1.sender.clone(), device.clone())
     } else {
         let (tx2, rx2) = std::sync::mpsc::sync_channel(1024);
-        let server2 = polyfish::ai::inference::InferenceServer::new(network2_arc.clone(), rx2, 64);
+        let server2 = polyfish::ai::inference::InferenceServer::new(network2_arc.clone(), rx2, 128);
         std::thread::spawn(move || {
             server2.run();
         });
