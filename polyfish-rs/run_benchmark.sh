@@ -21,7 +21,12 @@ echo "Starting Benchmark..."
 START_TIME=$(date +%s)
 
 # Run self_play
-./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS
+# Run self_play and capture output to find device
+OUTPUT=$(./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS 2>&1)
+echo "$OUTPUT"
+
+# Extract Device
+DEVICE_USED=$(echo "$OUTPUT" | grep "Using device:" | head -n 1)
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
@@ -32,5 +37,6 @@ GPS=$(echo "scale=2; $NUM_GAMES / $DURATION" | bc)
 echo "=============================================="
 echo "Benchmark Complete!"
 echo "Total Time: ${DURATION}s"
+echo "Device: $DEVICE_USED"
 echo "Throughput: $GPS games/second"
 echo "=============================================="
