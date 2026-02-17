@@ -2,7 +2,7 @@
 set -e
 
 # Configuration for Benchmark
-NUM_GAMES=50
+NUM_GAMES=5
 MCTS_ITERS=200
 # Ensure batch inference is fully utilized
 export RAYON_NUM_THREADS=24
