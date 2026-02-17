@@ -363,6 +363,15 @@ pub fn step_unit(
             }
         }
 
+        // Sort targets by index descending to avoid shift issues during removal
+        // Note: We need to group by tribe/owner if we want to be perfectly safe,
+        // but sorting by (owner, index) descending works if we assume owner is checked.
+        // Actually, if we mix tribes, removing from Tribe A doesn't affect Tribe B indices.
+        // But removing multiple from Tribe A does.
+        // So sorting by index descending is sufficient IF we process one tribe at a time?
+        // No, (owner, index) tuple sort descending works because within same owner, indices will be descending.
+        stomp_targets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).reverse());
+
         // 2. Application Phase
         for (adj_owner, adj_unit_idx) in stomp_targets {
             // Apply Damage
@@ -849,7 +858,7 @@ pub fn attack_unit(
         }
     }
 
-    let defender_idx = defender_idx.unwrap(); // fast fail if logic error
+    let mut defender_idx = defender_idx.unwrap(); // fast fail if logic error
 
     let (def_def, def_health, def_max_health, defense_bonus, def_coords) = {
         let tribe = state.tribes.get(&defender_owner).unwrap();
@@ -926,6 +935,9 @@ pub fn attack_unit(
             }
         }
 
+        // Sort targets by index descending
+        splash_targets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).reverse());
+
         // 2. Application Phase
         for (adj_owner, adj_unit_idx) in splash_targets {
             let mut unit_died = false;
@@ -967,6 +979,11 @@ pub fn attack_unit(
                     Some(attacker_owner),
                     Some(attacker_idx),
                 ));
+
+                // Update defender_idx if we removed a lower index unit from the same tribe
+                if adj_owner == defender_owner && adj_unit_idx < defender_idx {
+                    defender_idx -= 1;
+                }
             }
         }
     }
