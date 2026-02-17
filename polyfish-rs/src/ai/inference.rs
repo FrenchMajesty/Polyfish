@@ -117,23 +117,110 @@ impl InferenceServer {
             // PolicyOutput fields are tensors [Total_B, ...]
             // ValueOutput fields are [Total_B, 1]
 
+            let total_batch_size: usize = sizes.iter().sum();
+            let output_batch_size = policy_out.action_type.dim(0).unwrap_or(0);
+
+            if output_batch_size != total_batch_size {
+                eprintln!(
+                    "CRITICAL ERROR: Mismatch between input batch size and output batch size!"
+                );
+                eprintln!("Input batch size (sum of requests): {}", total_batch_size);
+                eprintln!("Output batch size (from network): {}", output_batch_size);
+                eprintln!("Batch spatial shape: {:?}", batch_spatial.shape());
+            }
+
             let mut offset = 0;
             for (i, req) in batch_queue.drain(..).enumerate() {
                 let size = sizes[i];
 
                 // Helper to slice
                 let slice_policy = PolicyOutput {
-                    action_type: policy_out.action_type.narrow(0, offset, size).unwrap(),
-                    source_spatial: policy_out.source_spatial.narrow(0, offset, size).unwrap(),
-                    target_spatial: policy_out.target_spatial.narrow(0, offset, size).unwrap(),
-                    move_option: policy_out.move_option.narrow(0, offset, size).unwrap(),
+                    action_type: policy_out
+                        .action_type
+                        .narrow(0, offset, size)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "Slice action failed: {} offset {} size {} dim {:?}",
+                                e,
+                                offset,
+                                size,
+                                policy_out.action_type.shape()
+                            )
+                        }),
+                    source_spatial: policy_out
+                        .source_spatial
+                        .narrow(0, offset, size)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "Slice source failed: {} offset {} size {} dim {:?}",
+                                e,
+                                offset,
+                                size,
+                                policy_out.source_spatial.shape()
+                            )
+                        }),
+                    target_spatial: policy_out
+                        .target_spatial
+                        .narrow(0, offset, size)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "Slice target failed: {} offset {} size {} dim {:?}",
+                                e,
+                                offset,
+                                size,
+                                policy_out.target_spatial.shape()
+                            )
+                        }),
+                    move_option: policy_out
+                        .move_option
+                        .narrow(0, offset, size)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "Slice option failed: {} offset {} size {} dim {:?}",
+                                e,
+                                offset,
+                                size,
+                                policy_out.move_option.shape()
+                            )
+                        }),
                 };
 
-                let slice_value = ValueOutput {
-                    win_value: value_out.win_value.narrow(0, offset, size).unwrap(),
-                    eco_value: value_out.eco_value.narrow(0, offset, size).unwrap(),
-                    mil_value: value_out.mil_value.narrow(0, offset, size).unwrap(),
-                };
+                let slice_value =
+                    ValueOutput {
+                        win_value: value_out.win_value.narrow(0, offset, size).unwrap_or_else(
+                            |e| {
+                                panic!(
+                                    "Slice win failed: {} offset {} size {} dim {:?}",
+                                    e,
+                                    offset,
+                                    size,
+                                    value_out.win_value.shape()
+                                )
+                            },
+                        ),
+                        eco_value: value_out.eco_value.narrow(0, offset, size).unwrap_or_else(
+                            |e| {
+                                panic!(
+                                    "Slice eco failed: {} offset {} size {} dim {:?}",
+                                    e,
+                                    offset,
+                                    size,
+                                    value_out.eco_value.shape()
+                                )
+                            },
+                        ),
+                        mil_value: value_out.mil_value.narrow(0, offset, size).unwrap_or_else(
+                            |e| {
+                                panic!(
+                                    "Slice mil failed: {} offset {} size {} dim {:?}",
+                                    e,
+                                    offset,
+                                    size,
+                                    value_out.mil_value.shape()
+                                )
+                            },
+                        ),
+                    };
 
                 let _ = req.reply.send((slice_policy, slice_value));
                 offset += size;
