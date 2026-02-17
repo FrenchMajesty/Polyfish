@@ -14,7 +14,7 @@ pub struct InferenceServer {
     network: Arc<PolyZeroNet>,
     receiver: Receiver<InferenceRequest>,
     batch_size: usize,
-    _device: Device,
+    device: Device,
 }
 
 impl InferenceServer {
@@ -24,7 +24,7 @@ impl InferenceServer {
         batch_size: usize,
     ) -> Self {
         Self {
-            _device: network.device(),
+            device: network.device(),
             network,
             receiver,
             batch_size,
@@ -85,14 +85,32 @@ impl InferenceServer {
                 sizes.push(req.spatial.dim(0).unwrap_or(1));
             }
 
-            let batch_spatial = Tensor::cat(&spatials, 0).expect("Failed to cat batch spatial");
-            let batch_player = Tensor::cat(&players, 0).expect("Failed to cat batch player");
+            let batch_spatial = Tensor::cat(&spatials, 0).unwrap_or_else(|e| {
+                panic!("Failed to cat batch spatial: {}", e);
+            });
+            let batch_player = Tensor::cat(&players, 0).unwrap_or_else(|e| {
+                panic!("Failed to cat batch player: {}", e);
+            });
+
+            // Ensure tensors are on the correct device (cheap no-op if already matching)
+            let batch_spatial = batch_spatial.to_device(&self.device).unwrap_or_else(|e| {
+                panic!("Failed to move batch spatial to device: {}", e);
+            });
+            let batch_player = batch_player.to_device(&self.device).unwrap_or_else(|e| {
+                panic!("Failed to move batch player to device: {}", e);
+            });
 
             // 3. Forward Pass
-            let (policy_out, value_out) = self
-                .network
-                .forward_t(&batch_spatial, &batch_player, false)
-                .expect("Inference failed");
+            let (policy_out, value_out) =
+                match self.network.forward_t(&batch_spatial, &batch_player, false) {
+                    Ok(out) => out,
+                    Err(e) => {
+                        eprintln!("InferenceServer Panic: Network forward failed: {}", e);
+                        eprintln!("Batch spatial shape: {:?}", batch_spatial.shape());
+                        eprintln!("Batch player shape: {:?}", batch_player.shape());
+                        panic!("Inference network error");
+                    }
+                };
 
             // 4. Split and Reply
             // We need to slice the outputs back to matches the requests
