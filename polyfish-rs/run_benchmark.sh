@@ -22,7 +22,7 @@ START_TIME=$(date +%s)
 
 # Run self_play
 # Use tee to stream output to console AND file for parsing
-./target/release/self_play --features cuda --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --no-train 2>&1 | tee benchmark_output.log
+./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --no-train 2>&1 | tee benchmark_output.log
 
 # Extract Device
 DEVICE_USED=$(grep "Using device:" benchmark_output.log | head -n 1)
@@ -31,7 +31,7 @@ END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
 
 # Calculate Games per Second
-GPS=$(echo "scale=2; $NUM_GAMES / $DURATION" | bc)
+GPS=$(awk "BEGIN {printf \"%.2f\", $NUM_GAMES / $DURATION}")
 
 echo "=============================================="
 echo "Benchmark Complete!"
