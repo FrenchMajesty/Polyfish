@@ -297,7 +297,7 @@ fn main() -> anyhow::Result<()> {
     let server1 = polyfish::ai::inference::InferenceServer::new(
         network1_arc.clone(),
         rx1,
-        64, // Batch size for GPU
+        256, // Max items per batch (approx 10 requests of 24)
     );
 
     // Spawn server 1

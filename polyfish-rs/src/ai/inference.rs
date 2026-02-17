@@ -35,9 +35,12 @@ impl InferenceServer {
         let mut batch_queue: Vec<InferenceRequest> = Vec::with_capacity(self.batch_size);
 
         loop {
+            let mut total_items = 0;
             // 1. Collect batch
             // Blocking receive for first item
             if let Ok(req) = self.receiver.recv() {
+                let items = req.spatial.dim(0).unwrap_or(1);
+                total_items += items;
                 batch_queue.push(req);
             } else {
                 // Channel closed
@@ -47,21 +50,17 @@ impl InferenceServer {
 
             // eprintln!("InferenceServer: Got 1 request");
 
-            // Greedy collect up to batch_size or timeout (simple greedy for now)
-            // Ideally we use a timeout, but std mpsc doesn't support recv_timeout easily with mixed blocking
-            // We can check try_recv loop
+            // Greedy collect up to batch_size items
+            // We want to fill the batch but not exceed the limit too much.
+            // Since we receive chunks of ~24, we might slightly overshoot if we check after receiving.
+            // But better to check `total_items < self.batch_size`
             let _start_time = Instant::now();
-            while batch_queue.len() < self.batch_size {
+            while total_items < self.batch_size {
                 if let Ok(req) = self.receiver.try_recv() {
+                    let items = req.spatial.dim(0).unwrap_or(1);
+                    total_items += items;
                     batch_queue.push(req);
                 } else {
-                    // Empty queue, maybe wait a tiny bit or just break if we have *something*
-                    // If we rely on pure blocking, we maximize throughput but latency suffers for single games.
-                    // For batch self-play, throughput is king.
-                    // Implementation: If we have data, process it. Don't busy wait too long.
-                    // Better: sleep briefly if queue is empty but batch not full?
-                    // Actually, for self-play with 24 threads, we likely always have data.
-                    // Simple logic: try_recv until empty.
                     break;
                 }
             }
