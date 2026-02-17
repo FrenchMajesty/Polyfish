@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use crate::game::Game;
 use crate::moves::Move;
 use crate::types::{MoveType, TribeType};
@@ -7,8 +9,15 @@ pub struct Book;
 impl Book {
     /// Returns a list of recommend moves from the opening book.
     /// Returns empty vector if no book moves are found.
-    pub fn recommend(game: &Game) -> Vec<Box<dyn Move>> {
+    pub fn recommend(_game: &Game) -> Vec<Box<dyn Move>> {
+        // OPENING BOOK DISABLED
+        // return Vec::new();
+
+        /*
         let pov = game.state.settings.current_player_turn_id;
+        // Early return to disable book
+        return Vec::new();
+
         let tribe = match game.state.tribes.get(&pov) {
             Some(t) => t.tribe_type,
             None => return Vec::new(),
@@ -40,9 +49,12 @@ impl Book {
         }
 
         recommended
+        */
+        Vec::new()
     }
 
     // TODO most tribes dont use these openings
+    #[allow(dead_code)]
     fn get_book_moves(tribe: TribeType, turn: i32) -> &'static [MoveType] {
         match tribe {
             TribeType::Imperius => match turn {

@@ -4,9 +4,9 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=20
-export MCTS_ITERS=100
-export RAYON_NUM_THREADS=12
-export OMP_NUM_THREADS=12
+export MCTS_ITERS=400
+export RAYON_NUM_THREADS=24
+export OMP_NUM_THREADS=24 # RunPod RTX 4080 16gb VRAM 62 GB RAM
 export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console
