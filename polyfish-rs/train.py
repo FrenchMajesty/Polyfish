@@ -8,7 +8,7 @@ import random
 import gc
 
 # --- Configuration ---
-BATCH_SIZE = 64
+BATCH_SIZE = 512
 EPOCHS = 5
 LEARNING_RATE = 0.001
 # Handle RTX 5090 / CUDA Arch compatibility issues
