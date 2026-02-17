@@ -94,6 +94,8 @@ pub fn remove_unit(
 
     // Centipede head replacement logic
     // If unit has a child segment, promote it to head
+    let mut child_promoted_info = None; // (child_idx, old_unit_type, old_health, old_parent_idx)
+
     if let Some(child_idx) = removed_unit.child_unit_idx {
         if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
             // Adjust index if child is after removed unit
@@ -106,6 +108,12 @@ pub fn remove_unit(
             if let Some(child) = tribe.units.get_mut(adj_child_idx) {
                 // Promote segment to Centipede
                 if child.unit_type == crate::types::UnitType::Segment {
+                    let old_type = child.unit_type;
+                    let old_health = child.health;
+                    let old_parent = child.parent_unit_idx;
+
+                    child_promoted_info = Some((adj_child_idx, old_type, old_health, old_parent));
+
                     let old_max_hp = crate::functions::get_unit_max_health(child);
                     let damage = old_max_hp - child.health;
 
@@ -154,6 +162,28 @@ pub fn remove_unit(
 
         // Restore to tribe
         if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
+            // Undo child promotion (MUST be done before inserting removed unit, because indices match current state)
+            if let Some((adj_child_idx, old_type, old_health, old_parent)) = child_promoted_info {
+                if let Some(child) = tribe.units.get_mut(adj_child_idx) {
+                    child.unit_type = old_type;
+                    child.health = old_health;
+                    child.parent_unit_idx = old_parent;
+                }
+            } else {
+                // If we didn't promote but had a child, we still cleared parent_idx.
+                // We need to restore it.
+                if let Some(child_idx) = removed_unit.child_unit_idx {
+                    let adj_child_idx = if child_idx > unit_idx {
+                        child_idx - 1
+                    } else {
+                        child_idx
+                    };
+                    if let Some(child) = tribe.units.get_mut(adj_child_idx) {
+                        child.parent_unit_idx = Some(unit_idx);
+                    }
+                }
+            }
+
             if !removed_unit.converted {
                 tribe.score += score_deduction;
             }
@@ -951,6 +981,8 @@ pub fn attack_unit(
             .unwrap_or(0)
     };
 
+    let mut attacker_died = false;
+
     if defender_health_after <= 0 {
         // Remove defender
         undos.push(remove_unit(
@@ -1091,6 +1123,7 @@ pub fn attack_unit(
                     Some(defender_owner),
                     Some(defender_idx),
                 ));
+                attacker_died = true;
             }
         }
 
@@ -1112,55 +1145,57 @@ pub fn attack_unit(
     }
 
     // End attacker's turn (unless Persist allows chain attacks or DoubleAttack allows second attack)
-    if let Some(tribe) = state.tribes.get_mut(&attacker_owner) {
-        if let Some(unit) = tribe.units.get_mut(attacker_idx) {
-            let old_attacked = unit.attacked;
-            let old_moved = unit.moved;
-            let old_attacks_performed = unit.attacks_performed;
+    if !attacker_died {
+        if let Some(tribe) = state.tribes.get_mut(&attacker_owner) {
+            if let Some(unit) = tribe.units.get_mut(attacker_idx) {
+                let old_attacked = unit.attacked;
+                let old_moved = unit.moved;
+                let old_attacks_performed = unit.attacks_performed;
 
-            // Persist: If attacker has Persist skill and killed the defender, don't set attacked=true
-            let killed_defender = defender_health_after <= 0;
-            let has_persist = crate::functions::has_skill(unit, SkillType::Persist);
-            let has_double_attack = crate::functions::has_skill(unit, SkillType::DoubleAttack);
+                // Persist: If attacker has Persist skill and killed the defender, don't set attacked=true
+                let killed_defender = defender_health_after <= 0;
+                let has_persist = crate::functions::has_skill(unit, SkillType::Persist);
+                let has_double_attack = crate::functions::has_skill(unit, SkillType::DoubleAttack);
 
-            // Increment attack counter for DoubleAttack tracking
-            unit.attacks_performed += 1;
+                // Increment attack counter for DoubleAttack tracking
+                unit.attacks_performed += 1;
 
-            // Set attacked flag based on skill interactions
-            if !(killed_defender && has_persist) {
-                // DoubleAttack allows 2 attacks, so only set attacked=true after 2nd attack
-                if has_double_attack && unit.attacks_performed < 2 {
-                    // Don't set attacked yet, allow second attack
-                } else {
-                    unit.attacked = true;
-                }
-            }
-
-            // Escape allows moving after attacking
-            // Prohibited for Skate units on land
-            let on_ice = state
-                .tiles
-                .get(&unit.coords.idx)
-                .map_or(false, |t| t.frozen);
-            let can_escape = crate::functions::has_skill(unit, SkillType::Escape)
-                && (!crate::functions::has_skill(unit, SkillType::Skate) || on_ice);
-
-            if can_escape {
-                // Escape: allow moving after attack — reset moved even if step_unit set it
-                unit.moved = false;
-            } else {
-                unit.moved = true;
-            }
-
-            undos.push(Box::new(move |s| {
-                if let Some(tribe) = s.tribes.get_mut(&attacker_owner) {
-                    if let Some(u) = tribe.units.get_mut(attacker_idx) {
-                        u.attacked = old_attacked;
-                        u.moved = old_moved;
-                        u.attacks_performed = old_attacks_performed;
+                // Set attacked flag based on skill interactions
+                if !(killed_defender && has_persist) {
+                    // DoubleAttack allows 2 attacks, so only set attacked=true after 2nd attack
+                    if has_double_attack && unit.attacks_performed < 2 {
+                        // Don't set attacked yet, allow second attack
+                    } else {
+                        unit.attacked = true;
                     }
                 }
-            }));
+
+                // Escape allows moving after attacking
+                // Prohibited for Skate units on land
+                let on_ice = state
+                    .tiles
+                    .get(&unit.coords.idx)
+                    .map_or(false, |t| t.frozen);
+                let can_escape = crate::functions::has_skill(unit, SkillType::Escape)
+                    && (!crate::functions::has_skill(unit, SkillType::Skate) || on_ice);
+
+                if can_escape {
+                    // Escape: allow moving after attack — reset moved even if step_unit set it
+                    unit.moved = false;
+                } else {
+                    unit.moved = true;
+                }
+
+                undos.push(Box::new(move |s| {
+                    if let Some(tribe) = s.tribes.get_mut(&attacker_owner) {
+                        if let Some(u) = tribe.units.get_mut(attacker_idx) {
+                            u.attacked = old_attacked;
+                            u.moved = old_moved;
+                            u.attacks_performed = old_attacks_performed;
+                        }
+                    }
+                }));
+            }
         }
     }
     Box::new(move |s| {
