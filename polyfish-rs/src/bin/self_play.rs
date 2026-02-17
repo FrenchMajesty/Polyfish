@@ -10,7 +10,39 @@ use polyfish::types::MapSize;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// Wrapper to measure inference time
+struct TimingWrapper<T: polyfish::ai::mcts_zero::NetworkEvaluator> {
+    inner: T,
+    total_time_ns: Arc<AtomicU64>,
+    count: Arc<AtomicUsize>,
+}
+
+impl<T: polyfish::ai::mcts_zero::NetworkEvaluator> polyfish::ai::mcts_zero::NetworkEvaluator
+    for TimingWrapper<T>
+{
+    fn evaluate(
+        &self,
+        spatial: &Tensor,
+        player: &Tensor,
+    ) -> anyhow::Result<(
+        polyfish::ai::network::PolicyOutput,
+        polyfish::ai::network::ValueOutput,
+    )> {
+        let start = Instant::now();
+        let res = self.inner.evaluate(spatial, player);
+        let dur = start.elapsed();
+        self.total_time_ns
+            .fetch_add(dur.as_nanos() as u64, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::Relaxed);
+        res
+    }
+    fn device(&self) -> Device {
+        self.inner.device()
+    }
+}
 
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
@@ -59,6 +91,8 @@ fn play_single_game(
     game.post_load();
 
     // Create two agents (they might share the same network, or be different)
+    // Create two agents (they might share the same network, or be different)
+    // We already passed wrapped networks
     let agent1 = ZeroMctsAgent::new(network1, mcts_iters);
     let agent2 = ZeroMctsAgent::new(network2, mcts_iters);
 
@@ -101,8 +135,17 @@ fn play_single_game(
             polyfish::ai::evaluator::army::evaluate_army(&game.state, pov).clamp(0.0, 1.0);
 
         // MCTS Search - use the correct agent
+        // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &agent1 } else { &agent2 };
+
+        let start_mcts = Instant::now();
         let (best_move, move_visits) = current_agent.select_move_with_decomposed_visits(&mut game);
+        // Note: mcts_time here INCLUDES inference time.
+        // We will subtract inference time later if we track it per-thread, but here we only have global stats.
+        // Actually, since we are inside a thread, we can't easily access the global atomic until the end.
+        // But the wrapper updates the atomic.
+        // We can measure "Total MCTS Time" here.
+        let _mcts_duration = start_mcts.elapsed();
 
         let map_size = game.state.settings.size as usize;
 
@@ -405,17 +448,33 @@ fn main() -> anyhow::Result<()> {
     println!("Selected Tribes: {:?} vs {:?}", t1, t2);
     let selected_tribes = vec![t1, t2];
 
+    // Profiling Globals
+    let total_inference_ns = Arc::new(AtomicU64::new(0));
+    let total_inference_count = Arc::new(AtomicUsize::new(0));
+
+    // Wrap evaluators
+    let eval1_wrapped = TimingWrapper {
+        inner: eval1,
+        total_time_ns: total_inference_ns.clone(),
+        count: total_inference_count.clone(),
+    };
+
+    let eval2_wrapped = TimingWrapper {
+        inner: eval2, // eval2 is either same as eval1 or new batch eval
+        total_time_ns: total_inference_ns.clone(), // Share metrics
+        count: total_inference_count.clone(),
+    };
+
     // Parallel game generation
+    let start_total = Instant::now();
     let results: Vec<GameResult> = (0..args.num_games)
         .into_par_iter()
         .filter_map(|i| {
             let seed = base_seed + i as u64;
             // Play with (Eval1, Eval2)
-            // Note: BatchEvaluator implements NetworkEvaluator.
-            // We need play_single_game to accept &dyn NetworkEvaluator
             play_single_game(
-                &eval1,
-                &eval2,
+                &eval1_wrapped,
+                &eval2_wrapped,
                 args.mcts_iters,
                 i,
                 seed,
@@ -424,6 +483,7 @@ fn main() -> anyhow::Result<()> {
             )
         })
         .collect();
+    let total_duration = start_total.elapsed();
 
     // Aggregate results
     let mut collected_spatial_maps: Vec<Tensor> = Vec::new();
@@ -525,6 +585,29 @@ fn main() -> anyhow::Result<()> {
         "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}}}",
         avg_score, max_score, avr_moves, p1_avg, p2_avg
     );
+
+    // Profiling Report
+    let inf_ns = total_inference_ns.load(Ordering::Relaxed);
+    let inf_count = total_inference_count.load(Ordering::Relaxed);
+    let inf_seconds = inf_ns as f64 / 1e9;
+
+    // Total simplified:
+    // This is aggregate time across ALL threads.
+    // Real wall clock time is `total_duration` (e.g. 10s).
+    // If we have 24 threads, total CPU time available is 240s.
+    // Inference time is also aggregate (waiting time).
+
+    println!("PROFILING:");
+    println!("  Total Wall Time: {:.2}s", total_duration.as_secs_f64());
+    println!("  Total Inference Calls: {}", inf_count);
+    println!("  Aggregate Inference Wait: {:.2}s", inf_seconds);
+    if inf_count > 0 {
+        println!(
+            "  Avg Inference Latency: {:.2}ms",
+            (inf_seconds * 1000.0) / inf_count as f64
+        );
+    }
+    // Note: Since inference is batched and async, "Wait" time includes time waiting for batch to fill + GPU time.
 
     // Stack and save
     if !args.no_train && !collected_spatial_maps.is_empty() {
