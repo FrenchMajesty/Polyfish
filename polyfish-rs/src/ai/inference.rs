@@ -88,11 +88,6 @@ impl InferenceServer {
             let batch_spatial = Tensor::cat(&spatials, 0).expect("Failed to cat batch spatial");
             let batch_player = Tensor::cat(&players, 0).expect("Failed to cat batch player");
 
-            eprintln!(
-                "InferenceServer: Processing batch of size {}",
-                batch_spatial.dim(0).unwrap()
-            );
-
             // 3. Forward Pass
             let (policy_out, value_out) = self
                 .network

@@ -63,17 +63,14 @@ impl NetworkEvaluator for BatchEvaluator {
             reply: tx,
         };
         // Send request
-        // eprintln!("BatchEvaluator: Sending request");
         self.sender
             .send(req)
             .map_err(|_| anyhow::anyhow!("Inference channel closed"))?;
 
         // Wait for reply
-        // eprintln!("BatchEvaluator: Waiting for reply");
         let (policy, value) = rx
             .recv()
             .map_err(|_| anyhow::anyhow!("Inference reply channel closed"))?;
-        // eprintln!("BatchEvaluator: Got reply");
         Ok((policy, value))
     }
     fn device(&self) -> candle_core::Device {
