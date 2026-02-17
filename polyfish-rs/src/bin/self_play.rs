@@ -37,6 +37,7 @@ fn play_single_game(
     game_idx: usize,
     seed: u64,
     tribes: Vec<TribeType>,
+    no_train: bool,
 ) -> Option<GameResult> {
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {
@@ -169,7 +170,9 @@ fn play_single_game(
         };
 
         if let Some(m) = best_move {
-            game_history.push((state_t, policy_data, pov, current_eco, current_mil));
+            if !no_train {
+                game_history.push((state_t, policy_data, pov, current_eco, current_mil));
+            }
             if move_count > 0 && move_count % 10 == 0 {
                 let current_scores: Vec<(PlayerId, i32)> = game
                     .state
@@ -243,6 +246,10 @@ fn main() -> anyhow::Result<()> {
         /// Second tribe (optional, defaults to random)
         #[arg(long)]
         tribe2: Option<String>,
+
+        /// Disable training data collection and saving
+        #[arg(long, default_value_t = false)]
+        no_train: bool,
     }
 
     let args = Args::parse();
@@ -413,6 +420,7 @@ fn main() -> anyhow::Result<()> {
                 i,
                 seed,
                 selected_tribes.clone(),
+                args.no_train,
             )
         })
         .collect();
@@ -519,7 +527,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     // Stack and save
-    if !collected_spatial_maps.is_empty() {
+    if !args.no_train && !collected_spatial_maps.is_empty() {
         let total_steps = collected_spatial_maps.len();
         println!("Saving {} steps...", total_steps);
 

@@ -15,18 +15,17 @@ echo "=============================================="
 
 # Build release binary if not already built
 echo "Building release binary..."
-cargo build --bin self_play --release --features cuda
+cargo build --bin self_play --release
 
 echo "Starting Benchmark..."
 START_TIME=$(date +%s)
 
 # Run self_play
-# Run self_play and capture output to find device
-OUTPUT=$(./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS 2>&1)
-echo "$OUTPUT"
+# Use tee to stream output to console AND file for parsing
+./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --no-train 2>&1 | tee benchmark_output.log
 
 # Extract Device
-DEVICE_USED=$(echo "$OUTPUT" | grep "Using device:" | head -n 1)
+DEVICE_USED=$(grep "Using device:" benchmark_output.log | head -n 1)
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
