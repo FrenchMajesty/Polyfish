@@ -100,16 +100,20 @@ impl InferenceServer {
             });
 
             // 3. Forward Pass
-            let (policy_out, value_out) =
-                match self.network.forward_t(&batch_spatial, &batch_player, false) {
-                    Ok(out) => out,
-                    Err(e) => {
-                        eprintln!("InferenceServer Panic: Network forward failed: {}", e);
-                        eprintln!("Batch spatial shape: {:?}", batch_spatial.shape());
-                        eprintln!("Batch player shape: {:?}", batch_player.shape());
-                        panic!("Inference network error");
-                    }
-                };
+            // 3. Forward Pass
+            let forward_result = self.network.forward_t(&batch_spatial, &batch_player, false);
+
+            let (policy_out, value_out) = match forward_result {
+                Ok(out) => out,
+                Err(e) => {
+                    eprintln!("InferenceServer Error: Network forward failed: {}", e);
+                    eprintln!("Batch spatial shape: {:?}", batch_spatial.shape());
+                    eprintln!("Batch player shape: {:?}", batch_player.shape());
+                    // Drop requests (triggering channel closed error on workers) and continue
+                    batch_queue.clear();
+                    continue;
+                }
+            };
 
             // 4. Split and Reply
             // We need to slice the outputs back to matches the requests
