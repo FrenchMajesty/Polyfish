@@ -244,8 +244,8 @@ impl Game {
             // Try discovering new tribes after the move (won't actually reveal in simulation)
             let discover_undo = try_discover_other_tribes(&mut self.state);
 
-            // Sync scores after move
-            sync_scores(&mut self.state);
+            // Sync scores after move (using undoable version)
+            let score_undo = actions::sync_scores_with_undo(&mut self.state);
 
             // Track the move type in recent moves
             self.state
@@ -258,6 +258,7 @@ impl Game {
 
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
+                score_undo(s);
                 discover_undo(s);
                 move_undo(s);
             }) as UndoCallback
@@ -292,6 +293,9 @@ impl Game {
 
         // Update pacifist turns
         if let Some(tribe) = state.tribes.get_mut(&active_pov) {
+            let old_pacifist = tribe.pacifist_turns;
+            let old_attacked = tribe.attacked_this_turn;
+
             if tribe.attacked_this_turn {
                 tribe.pacifist_turns = 0;
             }
@@ -300,6 +304,14 @@ impl Game {
                 tribe.pacifist_turns += 1;
             }
             tribe.attacked_this_turn = false;
+
+            // Undo logic for pacifist/attacked state
+            undos.push(Box::new(move |s| {
+                if let Some(t) = s.tribes.get_mut(&active_pov) {
+                    t.pacifist_turns = old_pacifist;
+                    t.attacked_this_turn = old_attacked;
+                }
+            }));
         }
 
         undos.push(actions::process_end_turn_effects(state, active_pov));

@@ -769,3 +769,31 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
 
     chain_undos(undos)
 }
+
+/// Sync all tribes' scores based on current state and return undo callback
+pub fn sync_scores_with_undo(state: &mut GameState) -> UndoCallback {
+    use crate::functions::calculate_detailed_tribe_score;
+    let ids: Vec<PlayerId> = state.tribes.keys().cloned().collect();
+    let mut old_scores = Vec::new();
+
+    for id in &ids {
+        if let Some(tribe) = state.tribes.get(id) {
+            old_scores.push((*id, tribe.score));
+        }
+    }
+
+    for id in &ids {
+        let score = calculate_detailed_tribe_score(state, *id);
+        if let Some(tribe) = state.tribes.get_mut(id) {
+            tribe.score = score;
+        }
+    }
+
+    Box::new(move |s| {
+        for (id, score) in old_scores {
+            if let Some(tribe) = s.tribes.get_mut(&id) {
+                tribe.score = score;
+            }
+        }
+    })
+}
