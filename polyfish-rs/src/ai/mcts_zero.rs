@@ -68,10 +68,11 @@ impl NetworkEvaluator for BatchEvaluator {
             .map_err(|_| anyhow::anyhow!("Inference channel closed"))?;
 
         // Wait for reply
-        let (policy, value) = rx
+        let result = rx
             .recv()
             .map_err(|_| anyhow::anyhow!("Inference reply channel closed"))?;
-        Ok((policy, value))
+
+        result.map_err(|e| anyhow::anyhow!("Inference failed: {}", e))
     }
     fn device(&self) -> candle_core::Device {
         self.device.clone()

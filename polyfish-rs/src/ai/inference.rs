@@ -7,7 +7,7 @@ use std::time::Instant;
 pub struct InferenceRequest {
     pub spatial: Tensor, // [B, C, H, W]
     pub player: Tensor,  // [B, 10]
-    pub reply: Sender<(PolicyOutput, ValueOutput)>,
+    pub reply: Sender<Result<(PolicyOutput, ValueOutput), String>>,
 }
 
 pub struct InferenceServer {
@@ -106,11 +106,15 @@ impl InferenceServer {
             let (policy_out, value_out) = match forward_result {
                 Ok(out) => out,
                 Err(e) => {
-                    eprintln!("InferenceServer Error: Network forward failed: {}", e);
+                    let err_msg = format!("InferenceServer Error: Network forward failed: {}", e);
+                    eprintln!("{}", err_msg);
                     eprintln!("Batch spatial shape: {:?}", batch_spatial.shape());
                     eprintln!("Batch player shape: {:?}", batch_player.shape());
-                    // Drop requests (triggering channel closed error on workers) and continue
-                    batch_queue.clear();
+
+                    // Respond with error to all waiting requests
+                    for req in batch_queue.drain(..) {
+                        let _ = req.reply.send(Err(err_msg.clone()));
+                    }
                     continue;
                 }
             };
@@ -225,7 +229,7 @@ impl InferenceServer {
                         ),
                     };
 
-                let _ = req.reply.send((slice_policy, slice_value));
+                let _ = req.reply.send(Ok((slice_policy, slice_value)));
                 offset += size;
             }
         }
