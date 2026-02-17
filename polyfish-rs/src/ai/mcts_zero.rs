@@ -1,15 +1,101 @@
 use crate::ai::features::{self, GameFeatures, state_to_tensor};
-use crate::ai::network::{PolicyOutput, PolyZeroNet};
+use crate::ai::inference::InferenceRequest;
+use crate::ai::network::{PolicyOutput, PolyZeroNet, ValueOutput};
 use crate::game::Game;
 use crate::moves::EndTurnMove;
 use crate::moves::Move;
 use crate::types::MoveType;
 use candle_core::Tensor;
+use std::sync::mpsc::channel;
 
 use std::cell::RefCell;
 
+/// Trait to abstract network evaluation (Direct vs Batched)
+pub trait NetworkEvaluator: Sync + Send {
+    fn evaluate(
+        &self,
+        spatial: &Tensor,
+        player: &Tensor,
+    ) -> anyhow::Result<(PolicyOutput, ValueOutput)>;
+    fn device(&self) -> candle_core::Device;
+}
+
+// Direct evaluation implementation
+impl NetworkEvaluator for PolyZeroNet {
+    fn evaluate(
+        &self,
+        spatial: &Tensor,
+        player: &Tensor,
+    ) -> anyhow::Result<(PolicyOutput, ValueOutput)> {
+        Ok(self.forward_t(spatial, player, false)?)
+    }
+    fn device(&self) -> candle_core::Device {
+        self.device()
+    }
+}
+
+// Batched evaluation implementation via channel
+#[derive(Clone)]
+pub struct BatchEvaluator {
+    pub sender: std::sync::mpsc::SyncSender<InferenceRequest>,
+    pub device: candle_core::Device,
+}
+
+impl BatchEvaluator {
+    pub fn new(
+        sender: std::sync::mpsc::SyncSender<InferenceRequest>,
+        device: candle_core::Device,
+    ) -> Self {
+        Self { sender, device }
+    }
+}
+
+impl NetworkEvaluator for BatchEvaluator {
+    fn evaluate(
+        &self,
+        spatial: &Tensor,
+        player: &Tensor,
+    ) -> anyhow::Result<(PolicyOutput, ValueOutput)> {
+        let (tx, rx) = channel();
+        let req = InferenceRequest {
+            spatial: spatial.clone(),
+            player: player.clone(),
+            reply: tx,
+        };
+        // Send request
+        // eprintln!("BatchEvaluator: Sending request");
+        self.sender
+            .send(req)
+            .map_err(|_| anyhow::anyhow!("Inference channel closed"))?;
+
+        // Wait for reply
+        // eprintln!("BatchEvaluator: Waiting for reply");
+        let (policy, value) = rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("Inference reply channel closed"))?;
+        // eprintln!("BatchEvaluator: Got reply");
+        Ok((policy, value))
+    }
+    fn device(&self) -> candle_core::Device {
+        self.device.clone()
+    }
+}
+
+impl<T: NetworkEvaluator + ?Sized> NetworkEvaluator for std::sync::Arc<T> {
+    fn evaluate(
+        &self,
+        spatial: &Tensor,
+        player: &Tensor,
+    ) -> anyhow::Result<(PolicyOutput, ValueOutput)> {
+        (**self).evaluate(spatial, player)
+    }
+    fn device(&self) -> candle_core::Device {
+        (**self).device()
+    }
+}
+
 pub struct ZeroMctsAgent<'a> {
-    pub network: &'a PolyZeroNet,
+    pub network: &'a dyn NetworkEvaluator,
     pub iterations: usize,
     pub c_puct: f32,
     pub batch_size: usize,
@@ -104,7 +190,7 @@ struct LeafData {
 }
 
 impl<'a> ZeroMctsAgent<'a> {
-    pub fn new(network: &'a PolyZeroNet, iterations: usize) -> Self {
+    pub fn new(network: &'a dyn NetworkEvaluator, iterations: usize) -> Self {
         Self {
             network,
             iterations,
@@ -400,7 +486,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
                 // Run NN inference
                 if let Ok((policy_out, value_out)) =
-                    self.network.forward_t(&batch_spatial, &batch_player, false)
+                    self.network.evaluate(&batch_spatial, &batch_player)
                 {
                     let win_values = value_out
                         .win_value
@@ -641,7 +727,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
         // Update each node along the path
         let mut current = root;
-        for &idx in indices {
+        for (_i, &idx) in indices.iter().enumerate() {
             value = -value; // Flip value for opponent
 
             if let Some(child) = current.children.get_mut(idx) {
@@ -666,7 +752,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
         let (policy_output, _value_output) = self
             .network
-            .forward_t(&features.spatial_map, &features.player_state, false)
+            .evaluate(&features.spatial_map, &features.player_state)
             .expect("BUG: Network forward pass failed in MCTS");
 
         // Expand

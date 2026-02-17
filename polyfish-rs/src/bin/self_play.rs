@@ -31,8 +31,8 @@ struct GameResult {
 
 /// Play a single game and return the result
 fn play_single_game(
-    network1: &PolyZeroNet,
-    network2: &PolyZeroNet, // Added network2
+    network1: &dyn polyfish::ai::mcts_zero::NetworkEvaluator,
+    network2: &dyn polyfish::ai::mcts_zero::NetworkEvaluator, // Added network2
     mcts_iters: usize,
     game_idx: usize,
     seed: u64,
@@ -247,31 +247,36 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
+    // We need to initialize the rayon threadpool manually to ensure stack size is large enough?
+    // Default is usually fine.
+
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
     println!("Using device: {:?}", device);
 
-    // Load Main Model (P1)
+    // 1. Setup Network 1
     let model_path = "model.safetensors";
     let mut varmap = candle_nn::VarMap::new();
 
-    let network1 = if std::path::Path::new(model_path).exists() {
+    let network1_arc = if std::path::Path::new(model_path).exists() {
         println!("Loading main model from {}", model_path);
         varmap.load(model_path)?;
-        PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+        let net = PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
             &varmap,
             candle_core::DType::F32,
             &device,
-        ))?
+        ))?;
+        Arc::new(net)
     } else {
-        panic!(
-            "Model file {} not found! Please run init_model.py first.",
-            model_path
-        );
+        panic!("Model file {} not found!", model_path);
     };
-    let network1 = Arc::new(network1);
 
-    // Load Opponent Model (P2) - Defaults to same as P1
-    let network2 = if let Some(opp_path) = args.opponent {
+    // 2. Setup Network 2 (Opponent)
+    // If opponent is None, we play against self.
+    // If we play against self, we can utilize the SAME InferenceServer for double throughput?
+    // Actually, distinct networks need distinct servers.
+    // Same network can use same server.
+
+    let (network2_arc, is_self_play) = if let Some(opp_path) = args.opponent {
         println!("Loading opponent model from {}", opp_path);
         let mut varmap2 = candle_nn::VarMap::new();
         varmap2.load(&opp_path)?;
@@ -280,26 +285,50 @@ fn main() -> anyhow::Result<()> {
             candle_core::DType::F32,
             &device,
         ))?;
-        Arc::new(net)
+        (Arc::new(net), false)
     } else {
         println!("No opponent specified. Playing against self.");
-        network1.clone()
+        (network1_arc.clone(), true)
+    };
+
+    // 3. Start Inference Servers
+    // We use a channel size big enough to hold requests from all threads
+    let (tx1, rx1) = std::sync::mpsc::sync_channel(1024);
+    let server1 = polyfish::ai::inference::InferenceServer::new(
+        network1_arc.clone(),
+        rx1,
+        64, // Batch size for GPU
+    );
+
+    // Spawn server 1
+    std::thread::spawn(move || {
+        server1.run();
+    });
+
+    // Evaluator for Net 1
+    let eval1 = polyfish::ai::mcts_zero::BatchEvaluator::new(tx1, device.clone());
+    // We need to pass this to threads. BatchEvaluator contains Sender which is Clone.
+
+    // Evaluator for Net 2
+    let eval2 = if is_self_play {
+        // Reuse eval1 (sends to same server)
+        polyfish::ai::mcts_zero::BatchEvaluator::new(eval1.sender.clone(), device.clone())
+    } else {
+        let (tx2, rx2) = std::sync::mpsc::sync_channel(1024);
+        let server2 = polyfish::ai::inference::InferenceServer::new(network2_arc.clone(), rx2, 64);
+        std::thread::spawn(move || {
+            server2.run();
+        });
+        polyfish::ai::mcts_zero::BatchEvaluator::new(tx2, device.clone())
     };
 
     let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     println!(
-        "Starting parallel self-play: {} games with {} MCTS iterations",
+        "Starting parallel self-play: {} games with {} MCTS iterations (Batch Inference Enabled)",
         args.num_games, args.mcts_iters
     );
 
-    // Parse tribes from args or use random if not specified (placeholder, logic moved inside loop or done here)
-    // Actually, user wants "per iteration it should pick only 2 and play those 20 games with only those tribes"
-    // So we pick them once here.
-
-    use std::str::FromStr;
-
-    // Helper to parse or pick random
     let all_tribes = vec![
         TribeType::Imperius,
         TribeType::Bardur,
@@ -309,23 +338,13 @@ fn main() -> anyhow::Result<()> {
         TribeType::Zebasi,
         TribeType::AiMo,
         TribeType::Vengir,
-        TribeType::Luxidoor, // Luxidoor is valid but maybe check others?
+        TribeType::Luxidoor,
         TribeType::Quetzali,
         TribeType::Hoodrick,
         TribeType::Yadakk,
-        // TribeType::Aquarion, TribeType::Elyrion, TribeType::Polaris, TribeType::Cymanti // Special tribes might be too diff for now? user said "strict selection" but "random". Let's stick to standard human tribes first?
-        // User didn't specify subset, just "random strict selection".
-        // Let's include all standard tribes.
     ];
 
     let t1 = if let Some(s) = &args.tribe1 {
-        // We need a FromStr or manual matching since TribeType might not derive FromStr
-        // For now, let's implement a quick helper or match.
-        // Actually TribeType usually derives EnumString in other crates, let's assume we can match or defaults.
-        // Let's do a simple match for safety as I don't see EnumString derived in view_file(types.rs) - wait I haven't seen types.rs
-        // But mapgen used them.
-        // Let's rely on standard debug print matching if needed, or better:
-        // Let's just hardcode a parser here since we don't have FromStr confirmed.
         match s.to_lowercase().as_str() {
             "imperius" => TribeType::Imperius,
             "bardur" => TribeType::Bardur,
@@ -350,8 +369,7 @@ fn main() -> anyhow::Result<()> {
         }
     } else {
         use rand::seq::SliceRandom;
-        let mut rng = rand::thread_rng();
-        *all_tribes.choose(&mut rng).unwrap()
+        *all_tribes.choose(&mut rand::thread_rng()).unwrap()
     };
 
     let t2 = if let Some(s) = &args.tribe2 {
@@ -368,19 +386,11 @@ fn main() -> anyhow::Result<()> {
             "quetzali" => TribeType::Quetzali,
             "hoodrick" => TribeType::Hoodrick,
             "yadakk" => TribeType::Yadakk,
-            "aquarion" => TribeType::Aquarion,
-            "elyrion" => TribeType::Elyrion,
-            "polaris" => TribeType::Polaris,
-            "cymanti" => TribeType::Cymanti,
-            _ => {
-                eprintln!("Unknown tribe {}, using Oumaji", s);
-                TribeType::Oumaji
-            }
+            _ => TribeType::Oumaji,
         }
     } else {
         use rand::seq::SliceRandom;
         let mut rng = rand::thread_rng();
-        // Pick distinct from t1
         loop {
             let t = *all_tribes.choose(&mut rng).unwrap();
             if t != t1 {
@@ -389,18 +399,20 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    println!("Selected Tribes for this iteration: {:?} vs {:?}", t1, t2);
+    println!("Selected Tribes: {:?} vs {:?}", t1, t2);
     let selected_tribes = vec![t1, t2];
 
-    // Parallel game generation using rayon
+    // Parallel game generation
     let results: Vec<GameResult> = (0..args.num_games)
         .into_par_iter()
         .filter_map(|i| {
             let seed = base_seed + i as u64;
-            // Play with (Net1, Net2)
+            // Play with (Eval1, Eval2)
+            // Note: BatchEvaluator implements NetworkEvaluator.
+            // We need play_single_game to accept &dyn NetworkEvaluator
             play_single_game(
-                &network1,
-                &network2,
+                &eval1,
+                &eval2,
                 args.mcts_iters,
                 i,
                 seed,

@@ -2,6 +2,7 @@ pub mod book;
 pub mod evaluator;
 pub mod features;
 pub mod heuristic_mcts;
+pub mod inference;
 pub mod mapper;
 pub mod mcts;
 pub mod mcts_types;
