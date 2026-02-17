@@ -192,8 +192,8 @@ impl<'a> ZeroMctsAgent<'a> {
         Self {
             network,
             iterations,
-            c_puct: 1.5,    // Increased from 1.0 for more exploration
-            batch_size: 24, // Reduced from 32 to fix OOM on A40
+            c_puct: 1.5,   // Increased from 1.0 for more exploration
+            batch_size: 8, // Reduced from 24 to 8 to fix OOM
             virtual_loss: 1.0,
         }
     }

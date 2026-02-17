@@ -344,7 +344,8 @@ fn main() -> anyhow::Result<()> {
     // 3. Start Inference Servers
     // We use a channel size big enough to hold requests from all threads
     let (tx1, rx1) = std::sync::mpsc::sync_channel(1024);
-    let server1 = polyfish::ai::inference::InferenceServer::new(network1_arc.clone(), rx1, 32);
+    // Reduced batch size from 32 to 16 to fix OOM on 4090
+    let server1 = polyfish::ai::inference::InferenceServer::new(network1_arc.clone(), rx1, 16);
 
     // Spawn server 1
     std::thread::spawn(move || {
