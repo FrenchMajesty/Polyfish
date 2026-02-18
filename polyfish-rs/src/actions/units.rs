@@ -1854,7 +1854,13 @@ pub fn convert_unit(
         // Add back to old tribe
         if let Some(tribe) = s.tribes.get_mut(&target_owner) {
             // Restore exact original state
-            tribe.units.push(original_unit.clone());
+            // Use insert to preserve indices of other units!
+            if _old_idx <= tribe.units.len() {
+                tribe.units.insert(_old_idx, original_unit.clone());
+            } else {
+                // Fallback (should not happen if undo is LIFO)
+                tribe.units.push(original_unit.clone());
+            }
         }
         // Restore tile
         if let Some(tile) = s.tiles.get_mut(&target_idx) {
