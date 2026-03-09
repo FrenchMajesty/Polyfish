@@ -848,9 +848,9 @@ fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
     let is_last_turn = current_turn >= max_turns;
     // +1 because we want to include the current turn in the lookahead
     1 + match current_turn {
-        1 => 1,
-        2 => 2,
-        3 => 2,
+        1 => 3,
+        2 => 3,
+        3 => 3,
         4 => 2,
         5 => 2,
         6 => 2,
@@ -864,9 +864,9 @@ fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
                 2
             }
         }
-        11 => 1,
-        12 => 1,
-        13 => 1,
-        _ => 1, // 14+
+        11 => 2,
+        12 => 2,
+        13 => 2,
+        _ => 2, // 14+
     }
 }

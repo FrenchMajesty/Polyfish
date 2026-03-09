@@ -13,6 +13,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Wrapper to measure inference time
 struct TimingWrapper<T: polyfish::ai::mcts_zero::NetworkEvaluator> {
     inner: T,
